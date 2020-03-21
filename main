@@ -1,0 +1,607 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdlib.h>
+
+#include <unistd.h>
+#include <sys/file.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+
+#include <signal.h>
+
+
+void print_single(char** comand)
+{
+	if (!comand)
+		return;
+	char** tmp = comand;
+	while (*tmp)
+	{
+		printf("%s\n", *tmp);
+		tmp++;
+	}
+	return;
+}
+
+void print_comand(char*** comand, int x)
+{
+	int i;
+	if (!comand)
+		return;
+	for (i = 0; i < x; i++)
+	{
+		print_single(comand[i]);
+		printf("\n");
+	}
+	for (i = 0; i < 3; i++)
+	{
+		if (comand[x][i])
+			printf("%s\n", comand[x][i]);
+	}
+	return;
+}
+
+char* copy_str(char* str)
+{
+    int size = 2;
+    char* ans = malloc(size);
+
+    int i = 0;
+    ans[i] = 0;
+
+    while ((str[i]) && (str[i] != '\n') && (str[i] != EOF))
+    {
+        ans[i] = str[i]; i++;
+        if (i == size)
+        {
+            size = size * 2;
+            ans = realloc(ans, size);
+        }
+        ans[i] = 0;
+    }
+    return ans;
+}
+
+int exec_conv(char*** comand, int x)
+{
+    int ans = 0;
+    int stat = 0;
+    int pid;
+    if (!x)
+        return -1;
+
+    if (x == 1)
+    {
+        pid = fork();
+
+        if (pid < 0)
+            // <error
+        {
+            perror("fork");
+            return -1;
+        }
+        // error>
+
+        if (!pid)
+        {
+            execvp(comand[0][0], comand[0]);
+            perror("erroro in exec");
+            exit(-1);
+        }
+        else
+        {
+            close(0);
+            waitpid(pid, &stat, 0);
+            if (WIFEXITED(stat))
+                ans = WEXITSTATUS(stat);
+            else ans = -1;
+            return ans;
+        }
+    }
+    else
+    {
+        int fd[2];
+        if (pipe(fd) < 0)
+            // <error
+        {
+            perror("pipe");
+            return -1;
+        }
+        // error>
+
+        pid = fork();
+
+        if (pid < 0)
+            // <error
+        {
+            perror("fork");
+            return -1;
+        }
+        // error>
+
+        if (!pid)
+        {
+            dup2(fd[1], 1);
+            close(fd[0]);
+            close(fd[1]);
+            execvp(comand[0][0], comand[0]);
+            perror("erroro in exec");
+            exit(-1);
+        }
+        else
+        {
+            dup2(fd[0], 0);
+            close(fd[0]);
+            close(fd[1]);
+            ans = exec_conv(comand + 1, x - 1);
+            if (ans)
+                kill(pid, SIGKILL);
+            waitpid(pid, &stat, 0);
+            if (WIFEXITED(stat) && !ans)
+                ans = WEXITSTATUS(stat);
+            else ans = -1;
+            return ans;
+        }
+    }
+    return ans;
+}
+
+void free_single(char** comand)
+{
+    if (!comand)
+        return;
+    char** tmp = comand;
+    while (*tmp)
+    {
+        free(*tmp);
+        tmp++;
+    }
+    free(comand);
+    return;
+}
+
+void free_comand(char*** comand, int x)
+{
+    int i;
+    if (!comand)
+        return;
+    for (i = 0; i < x; i++)
+    {
+        free_single(comand[i]);
+    }
+    for (i = 0; i < 3; i++)
+    {
+        if (comand[x][i])
+            free(comand[x][i]);
+    }
+    free(comand);
+    return;
+}
+
+int extract_tail(int* background, char** comand, char** comand_tail)
+{
+    *background = 0;
+    int ans = 0;
+    int i = 0;
+    int flag = 0;
+    char* tmp = NULL;
+    while (comand[i])
+    {
+        if ((comand[i][0] == '<') || (comand[i][0] == '>'))
+        {
+            if (flag > 1)
+            {
+                while (comand[i])
+                    free(comand[i]), comand[i++] = NULL;
+                return 1;
+            }
+            flag = 1;
+        }
+        else if (comand[i][0] == '&')
+        {
+            if (flag >= 2)
+            {
+                while (comand[i])
+                    free(comand[i]), comand[i++] = NULL;
+                return 1;
+            }
+            flag = 2;
+        }
+        else if(flag > 0)
+        {
+            while (comand[i])
+                free(comand[i]), comand[i++] = NULL;
+            return 1;
+        }
+        if (flag > 0)
+        {
+            tmp = comand[i];
+            comand[i] = NULL;
+            if ((flag == 2) && (tmp[1]))
+            {
+                free(tmp); i++;
+                while (comand[i])
+                    free(comand[i]), comand[i++] = NULL;
+                return 1;
+            }
+            else if (flag == 2)
+            {
+                *background = 1;
+            }
+            else
+            {
+                if (tmp[0] == '<')
+                {
+                    if (comand_tail[0] || !tmp[1])
+                    {
+                        free(tmp); i++;
+                        while (comand[i])
+                            free(comand[i]), comand[i++] = NULL;
+                        return 1;
+                    }
+                    comand_tail[0] = copy_str(tmp + 1);
+                }
+                else if (tmp[1] == '>')
+                {
+                    if (comand_tail[2] || !tmp[2])
+                    {
+                        free(tmp); i++;
+                        while (comand[i])
+                            free(comand[i]), comand[i++] = NULL;
+                        return 1;
+                    }
+                    comand_tail[2] = copy_str(tmp + 2);
+                }
+                else
+                {
+                    if (comand_tail[1] || !tmp[1])
+                    {
+                        free(tmp); i++;
+                        while (comand[i])
+                            free(comand[i]), comand[i++] = NULL;
+                        return 1;
+                    }
+                    comand_tail[1] = copy_str(tmp + 1);
+                }
+                free(tmp);
+            }
+        }
+        i++;
+    }
+    return 0;
+}
+
+char* get_line(int* i, int* end)
+{
+    int size = 2;
+    char* ans = malloc(size * sizeof(char));
+
+    *i = 0;
+    ans[0] = 0;
+    char tmp = 0;
+    char prev = ' ';
+
+    while ((tmp = getchar()) && (tmp != '\n') && (tmp != EOF))
+    {
+        if ((tmp == prev) && (tmp == ' '))
+            continue;
+        prev = tmp;
+        if ((*i) + 1 >= size)
+        {
+            size = size * 2;
+            ans = realloc(ans, size * sizeof(char));
+        }
+        ans[*i] = tmp; (*i)++;
+        ans[*i] = 0;
+    }
+    *end = (tmp == EOF) || (tmp == 0);
+    return ans;
+}
+
+char* parse_word_from_line(char** line)
+{
+    int size = 2;
+    char* ans = malloc(size);
+
+    int i = 0;
+    ans[i] = 0;
+    char tmp;
+
+	while (**line == ' ')
+		(*line)++;
+    while ((tmp = *((*line)++)) && (tmp != '\n') && (tmp != EOF) && (tmp != ' ') && (tmp != '|'))
+    {
+        if (i+1 >= size)
+        {
+            size = size * 2;
+            ans = realloc(ans, size);
+        }
+        ans[i] = tmp; i++;
+        ans[i] = 0;
+    }
+	while (**line == ' ')
+		(*line)++;
+	if (tmp == 0)
+		(*line)--;
+	else if (tmp == '|')
+		(*line)--;
+    return ans;
+}
+
+char** parse_single_from_line(char** line, int* correct)
+{
+	int size = 2;
+	char** ans = (char**)malloc(size * sizeof(char*));
+
+	int i = 0;
+	ans[i] = NULL;
+	char* tmp;
+
+	while ((tmp = parse_word_from_line(line)) && (**line != 0) && (**line != '|'))
+	{
+		if (i + 1 >= size)
+		{
+			size = size * 2;
+			ans = (char**)realloc(ans, size * sizeof(char*));
+		}
+		ans[i] = tmp; i++;
+		ans[i] = NULL;
+		while (**line == ' ')
+			(*line)++;
+	}
+	if (i + 1 >= size)
+	{
+		size = size * 2;
+		ans = (char**)realloc(ans, size * sizeof(char*));
+	}
+	ans[i] = tmp; i++;
+	ans[i] = NULL;
+	if (**line == '|')
+		(*line)++;
+	print_single(ans);
+    return ans;
+}
+
+/*
+comand:
+words[n1] - first comand
+words[n2] - secon comand
+...
+words[nx] - last comand
+words[3] - rederected input/output
+*/
+
+char*** get_comand(int* background, int* x, int* end)
+{
+    char** comand_tail = NULL;
+    char*** ans = NULL;
+    char** comand = NULL;
+
+    int l_size = 0;
+    int f = 1;
+    char* line = NULL;
+    char* tmp = NULL;
+	*end = 0;
+    while (f && !*end)
+    {
+        free_comand(ans, *x);
+        *x = 0;
+        comand_tail = malloc(sizeof(char*) * 3);
+        comand_tail[0] = NULL; comand_tail[1] = NULL; comand_tail[2] = NULL;
+        ans = malloc(sizeof(char**));
+        ans[*x] = comand_tail;
+        comand = NULL;
+        f = 0;
+
+        line = get_line(&l_size, end);
+        tmp = line;
+
+        comand = parse_single_from_line(&tmp, &f);
+        while (*tmp && !f)
+        {
+            ans = realloc(ans, sizeof(char**) * ((*x) + 2));
+            ans[*x] = comand; (*x)++; // add comand to ans
+            ans[*x] = comand_tail;
+            comand = parse_single_from_line(&tmp, &f);
+        }
+        if (f)
+        {
+            free(line);
+            free_single(comand);
+            continue;
+        }
+        ans = realloc(ans, sizeof(char**) * ((*x) + 2));
+        ans[*x] = comand; (*x)++; // add comand to ans
+        ans[*x] = comand_tail;
+        f = extract_tail(background, comand, comand_tail);
+
+        free(line);
+    }
+    if (f && *end)
+    {
+        free_comand(ans, *x);
+        *x = 0;
+        ans = NULL;
+    }
+    return ans;
+}
+
+int main(int argc, char** argv)
+{
+    char*** comand = NULL;
+    int f = 0, x = 0, y = 0, end = 0;
+    int stat;
+    int fd = -1;
+
+    while (1)
+    {
+        printf("entr your comand$ ");
+        fflush(stdout);
+        comand = get_comand(&f, &x, &end);
+        if (end && (x == 0))
+        {
+            free_comand(comand, x);
+            break;
+        }
+
+        int pid = fork();
+
+        if (pid < 0)
+            // <error
+        {
+            perror("fork");
+            free_comand(comand, x);
+            continue;
+        }
+        // error>
+
+        if (!pid)
+            // <Son execute comand
+        {
+            if (f)
+                // <back ground
+            {
+                if (setpgid(0, 0))
+                    // <error
+                {
+                    perror("set");
+                    return 0;
+                }
+                // error>
+
+                int bgpid = fork();
+
+                if (bgpid < 0)
+                    // <error
+                {
+                    perror("back ground fork");
+                    return 0;
+                }
+                // error>
+
+                if (!bgpid)
+                    // <exec
+                {
+                    if ((fd = open("/dev/null", O_RDONLY)) == -1)
+                        // <error
+                    {
+                        perror("open");
+                    }
+                    // error>
+                    dup2(fd, 0);
+                    close(fd);
+
+                    if (comand[x])
+                        // <rederected input/output
+                    {
+                        if (comand[x][0])
+                        {
+                            if ((fd = open(comand[x][0], O_RDONLY)) == -1)
+                                // <error
+                            {
+                                perror("open");
+                            }
+                            // error>
+                            dup2(fd, 0);
+                            close(fd);
+                        }
+                        if (comand[x][1])
+                        {
+                            if ((fd = open(comand[x][1], O_WRONLY | O_CREAT | O_TRUNC, 0760)) == -1)
+                                // <error
+                            {
+                                perror("open");
+                            }
+                            // error>
+                            dup2(fd, 1);
+                            close(fd);
+                        }
+						if (comand[x][2] && !comand[x][1])
+                        {
+                            if ((fd = open(comand[x][2], O_WRONLY | O_CREAT | O_APPEND, 0760)) == -1)
+                                // <error
+                            {
+                                perror("open");
+                            }
+                            // error>
+                            dup2(fd, 1);
+                            close(fd);
+                        }
+                    }
+                    // rederected input/output>
+
+                    // execute conveyor
+                    if (exec_conv(comand, x))
+                        // <conveyor error
+                    {
+                        perror("conveyor");
+                    }
+                    // conveyor error>
+                }
+                // exec>
+                else return 0;
+            }
+            // back ground>
+            else
+                // <exec
+            {
+                if (comand[x])
+                    // <rederected input/output
+                {
+                    if (comand[x][0])
+                    {
+                        if ((fd = open(comand[x][0], O_RDONLY)) == -1)
+                            // <error
+                        {
+                            perror("open");
+                        }
+                        // error>
+                        dup2(fd, 0);
+                        close(fd);
+                    }
+                    if (comand[x][1])
+                    {
+                        if ((fd = open(comand[x][1], O_WRONLY | O_CREAT | O_TRUNC, 0760)) == -1)
+                            // <error
+                        {
+                            perror("open");
+                        }
+                        // error>
+                        dup2(fd, 1);
+                        close(fd);
+                    }
+                    if (comand[x][2] && !comand[x][1])
+                    {
+                        if ((fd = open(comand[x][2], O_WRONLY | O_CREAT | O_APPEND, 0760)) == -1)
+                            // <error
+                        {
+                            perror("open");
+                        }
+                        // error>
+                        dup2(fd, 1);
+                        close(fd);
+                    }
+                }
+                // rederected input/output>
+
+                // execute conveyor
+                if (exec_conv(comand, x))
+                    // <conveyor error
+                {
+                    perror("conveyor");
+                }
+                // conveyor error>
+            }
+            // exec>
+            return 0;
+        }
+        // son>
+
+        waitpid(pid, &stat, 0);
+        free_comand(comand, x);
+        if (end)
+            break;
+    }
+    return 0;
+}
