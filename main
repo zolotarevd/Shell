@@ -359,7 +359,7 @@ char** parse_single_from_line(char** line, int* correct)
 	ans[i] = NULL;
 	if (**line == '|')
 		(*line)++;
-	print_single(ans);
+	//print_single(ans);
     return ans;
 }
 
